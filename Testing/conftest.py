@@ -1,10 +1,6 @@
 import re
-
 import pytest
 import sqlite3
-import shutil
-import tempfile
-import os
 import random
 
 DB_FILE = 'Fleet_main.db'
