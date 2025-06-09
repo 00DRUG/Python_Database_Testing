@@ -1,38 +1,65 @@
-import sqlite3
-import os
 import pytest
-from Testing.DB_testing_features import clone_database, mode_a_randomize, mode_b_randomize
 
-@pytest.fixture
-def test_db(DB_NAME):
-    temp_db_path = clone_database(DB_NAME)
-    conn = sqlite3.connect(temp_db_path)
-    yield conn
-    conn.close()
-    os.remove(temp_db_path)
 
-def test_mode_a_randomizes_one_component(test_db):
-    cursor = test_db.cursor()
-    cursor.execute("SELECT ship, weapon, hull, engine FROM ships")
-    before = {row[0]: row[1:] for row in cursor.fetchall()}
+def get_ship_components(conn, ship):
+    cursor = conn.cursor()
+    cursor.execute("SELECT weapon, hull, engine FROM ships WHERE ship = ?", (ship,))
+    row = cursor.fetchone()
+    if row:
+        return {'weapon': row[0], 'hull': row[1], 'engine': row[2]}
+    return None
 
-    mode_a_randomize(test_db)
 
-    cursor.execute("SELECT ship, weapon, hull, engine FROM ships")
-    after = {row[0]: row[1:] for row in cursor.fetchall()}
+def get_weapon_params(conn, weapon):
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT reload_speed, rotational_speed, diameter, power_volley, count FROM weapons WHERE weapon = ?",
+        (weapon,))
+    return cursor.fetchone()
 
-    changed = sum(1 for ship in before if before[ship] != after[ship])
-    assert changed > 0, "No ship components were changed in Mode A"
 
-def test_mode_b_randomizes_component_parameters(test_db):
-    cursor = test_db.cursor()
-    cursor.execute("SELECT * FROM weapons")
-    weapons_before = cursor.fetchall()
+def get_hull_params(conn, hull):
+    cursor = conn.cursor()
+    cursor.execute("SELECT armor, type, capacity FROM hulls WHERE hull = ?", (hull,))
+    return cursor.fetchone()
 
-    mode_b_randomize(test_db)
 
-    cursor.execute("SELECT * FROM weapons")
-    weapons_after = cursor.fetchall()
+def get_engine_params(conn, engine):
+    cursor = conn.cursor()
+    cursor.execute("SELECT power, type FROM engines WHERE engine = ?", (engine,))
+    return cursor.fetchone()
 
-    changed = any(b != a for b, a in zip(weapons_before, weapons_after))
-    assert changed, "No weapon parameter was changed in Mode B"
+
+@pytest.mark.usefixtures("randomized_conn")
+def test_component_integrity(original_conn, randomized_conn, ship, component, mode):
+    orig_comp = get_ship_components(original_conn, ship)
+    rand_comp = get_ship_components(randomized_conn, ship)
+
+    if mode == 'a':
+        orig_value = orig_comp[component]
+        rand_value = rand_comp[component]
+        assert orig_value == rand_value, (
+            f"{ship}, {rand_value} \n"
+            f"expected: {orig_value} , was {rand_value}"
+        )
+    else:
+        if component == 'weapon':
+            orig_params = get_weapon_params(original_conn, orig_comp['weapon'])
+            rand_params = get_weapon_params(randomized_conn, rand_comp['weapon'])
+            cols = ['reload speed', 'rotational speed', 'diameter', 'power volley', 'count']
+        elif component == 'hull':
+            orig_params = get_hull_params(original_conn, orig_comp['hull'])
+            rand_params = get_hull_params(randomized_conn, rand_comp['hull'])
+            cols = ['armor', 'type', 'capacity']
+        else:  # engine
+            orig_params = get_engine_params(original_conn, orig_comp['engine'])
+            rand_params = get_engine_params(randomized_conn, rand_comp['engine'])
+            cols = ['power', 'type']
+
+        diffs = [
+            f"\n{col}: expected {o}, was {r}"
+            for col, o, r in zip(cols, orig_params, rand_params)
+            if o != r
+        ]
+        if diffs:
+            raise AssertionError(f"{ship}, {rand_comp[component]}" + " ".join(diffs))
